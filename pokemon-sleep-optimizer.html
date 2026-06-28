@@ -10,20 +10,18 @@
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0D1B2A; color: #E8E4F0; font-family: Inter, sans-serif; }
-.upload-zone { position: relative; border: 2px dashed rgba(75,45,143,0.5); border-radius: 16px;
-  padding: 32px 20px; text-align: center; background: rgba(75,45,143,0.05); margin-bottom: 16px; overflow: hidden; }
-.upload-zone input[type=file] { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0; }
 textarea { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(75,45,143,0.4);
   border-radius: 12px; color: #E8E4F0; padding: 12px; font-family: monospace; font-size: 11px;
   resize: vertical; min-height: 120px; outline: none; }
 textarea:focus { border-color: rgba(75,45,143,0.8); }
+textarea.prompt-box { min-height: 60px; font-size: 10px; color: #A09BC0; user-select: all; }
 button { cursor: pointer; }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TIER_COLORS = { S:"#F0C040", A:"#2ECC8A", B:"#7EC8E3", C:"#A09BC0", D:"#555577" };
@@ -35,9 +33,30 @@ const SUBSKILL_TIERS = {
   "Inventory Up S":"C","Energy Recovery Bonus":"C",
   "Dream Shard Bonus":"D","Sleep EXP Bonus":"D","Research EXP Bonus":"D","Exp. Bonus":"D",
 };
-const TIER_SCORES = { S:5, A:4, B:3, C:2, D:1 };
+const TIER_SCORES  = { S:5, A:4, B:3, C:2, D:1 };
 const SLOT_WEIGHTS = { 10:1.5, 25:1.25, 50:1.0, 70:0.75, 80:0.5 };
-const VIEWS = { COMPARE:"compare", ANALYZE:"analyze", ROSTER:"roster", ROSTER_ADD:"roster_add" };
+const VIEWS = { COMPARE:"compare", ANALYZE:"analyze", ROSTER:"roster" };
+
+const PROMPT_TEXT = `Analiza estos screenshots de Pokémon Sleep y devuelve SOLO un array JSON válido, sin texto adicional ni backticks. Cada objeto debe tener exactamente estos campos:
+[{
+  "name": "nombre del pokemon",
+  "species": "especie (ej Latios)",
+  "level": 27,
+  "rp": 1427,
+  "frequency": "38 mins 2 secs",
+  "carryLimit": 19,
+  "specialty": "Berries",
+  "nature": "Bashful",
+  "natureBuff": null,
+  "natureNerf": null,
+  "subskills": {
+    "10": {"name": "Helping Speed M", "locked": false},
+    "25": {"name": "Skill Level Up S", "locked": false},
+    "50": {"name": "Helping Speed S", "locked": true},
+    "70": {"name": "Dream Shard Bonus", "locked": true},
+    "80": {"name": "Research EXP Bonus", "locked": true}
+  }
+}]`;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const getTier = n => SUBSKILL_TIERS[n] || "C";
@@ -55,6 +74,27 @@ function freqToSecs(f) {
 }
 function totalScore(p) {
   return scoreSubskills(p.subskills) * 2 + 3600 / freqToSecs(p.frequency);
+}
+
+async function copyToClipboard(text, setCopied) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // fallback for older mobile browsers
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  } catch(e) { console.error(e); }
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -88,6 +128,27 @@ function RadarBar({label, value, max, color}) {
   );
 }
 
+function CopyPromptBox() {
+  const [copied, setCopied] = useState(false);
+  const taRef = useRef();
+  return (
+    <div style={{background:"rgba(75,45,143,0.1)",border:"1px solid rgba(75,45,143,0.25)",borderRadius:12,padding:16,marginBottom:14}}>
+      <div style={{fontSize:11,color:"#4B2D8F",fontFamily:"monospace",marginBottom:8,letterSpacing:"0.08em"}}>
+        PASO 1 — COPIA ESTE PROMPT PARA CLAUDE.AI
+      </div>
+      <textarea ref={taRef} readOnly className="prompt-box" value={PROMPT_TEXT}
+        onClick={()=>taRef.current?.select()}/>
+      <button onClick={()=>copyToClipboard(PROMPT_TEXT, setCopied)}
+        style={{width:"100%",marginTop:8,padding:"9px",
+          background:copied?"rgba(46,204,138,0.2)":"rgba(75,45,143,0.3)",
+          border:`1px solid ${copied?"rgba(46,204,138,0.5)":"rgba(75,45,143,0.5)"}`,
+          borderRadius:8,color:copied?"#2ECC8A":"#E8E4F0",fontSize:12,fontWeight:600}}>
+        {copied ? "✓ COPIADO" : "📋 COPIAR PROMPT"}
+      </button>
+    </div>
+  );
+}
+
 function PokemonCard({pokemon, rank, isWinner, onAddToRoster, inRoster, onRemoveFromRoster}) {
   const helpsPerHour = Math.round(3600 / freqToSecs(pokemon.frequency) * 10) / 10;
   const subskillScore = scoreSubskills(pokemon.subskills);
@@ -100,19 +161,24 @@ function PokemonCard({pokemon, rank, isWinner, onAddToRoster, inRoster, onRemove
       boxShadow:isWinner?"0 0 24px rgba(75,45,143,0.3)":"none",marginBottom:20}}>
 
       {rank !== undefined && (
-        <div style={{position:"absolute",top:-10,left:16,background:rankColors[rank]||"#555577",color:"#0D1B2A",
-          fontSize:10,fontWeight:800,padding:"3px 10px",borderRadius:20}}>
+        <div style={{position:"absolute",top:-10,left:16,background:rankColors[rank]||"#555577",
+          color:"#0D1B2A",fontSize:10,fontWeight:800,padding:"3px 10px",borderRadius:20}}>
           {rankLabels[rank]||`#${rank+1}`}
         </div>
       )}
 
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginTop:rank!==undefined?8:0,marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",
+        marginTop:rank!==undefined?8:0,marginBottom:16}}>
         <div>
           <div style={{fontSize:22,fontWeight:700,color:"#E8E4F0"}}>{pokemon.name}</div>
-          <div style={{fontSize:12,color:"#A09BC0",fontFamily:"monospace"}}>{pokemon.species} · Lv.{pokemon.level} · {pokemon.specialty}</div>
+          <div style={{fontSize:12,color:"#A09BC0",fontFamily:"monospace"}}>
+            {pokemon.species} · Lv.{pokemon.level} · {pokemon.specialty}
+          </div>
         </div>
         <div style={{textAlign:"right"}}>
-          <div style={{fontSize:20,fontWeight:700,color:"#F0C040",fontFamily:"monospace"}}>{(pokemon.rp||0).toLocaleString()}</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#F0C040",fontFamily:"monospace"}}>
+            {(pokemon.rp||0).toLocaleString()}
+          </div>
           <div style={{fontSize:10,color:"#555577",fontFamily:"monospace"}}>RP</div>
         </div>
       </div>
@@ -144,13 +210,14 @@ function PokemonCard({pokemon, rank, isWinner, onAddToRoster, inRoster, onRemove
       ))}
 
       {pokemon.verdict && (
-        <div style={{marginTop:14,padding:10,background:isWinner?"rgba(75,45,143,0.2)":"rgba(255,255,255,0.03)",
+        <div style={{marginTop:14,padding:10,
+          background:isWinner?"rgba(75,45,143,0.2)":"rgba(255,255,255,0.03)",
           borderRadius:8,borderLeft:`3px solid ${rankColors[rank]||"#555577"}`}}>
           <div style={{fontSize:11,color:"#A09BC0",lineHeight:1.5}}>{pokemon.verdict}</div>
         </div>
       )}
 
-      {/* Roster button */}
+      {/* Roster actions */}
       {onAddToRoster && !inRoster && (
         <button onClick={()=>onAddToRoster(pokemon)}
           style={{width:"100%",marginTop:14,padding:"10px",background:"rgba(46,204,138,0.15)",
@@ -159,7 +226,7 @@ function PokemonCard({pokemon, rank, isWinner, onAddToRoster, inRoster, onRemove
           + AGREGAR AL ROSTER
         </button>
       )}
-      {inRoster && (
+      {onAddToRoster && inRoster && (
         <div style={{width:"100%",marginTop:14,padding:"10px",background:"rgba(46,204,138,0.08)",
           border:"1px solid rgba(46,204,138,0.2)",borderRadius:10,color:"#2ECC8A",
           fontSize:12,fontWeight:700,letterSpacing:"0.05em",textAlign:"center"}}>
@@ -169,8 +236,7 @@ function PokemonCard({pokemon, rank, isWinner, onAddToRoster, inRoster, onRemove
       {onRemoveFromRoster && (
         <button onClick={()=>onRemoveFromRoster(pokemon.id)}
           style={{width:"100%",marginTop:8,padding:"8px",background:"rgba(232,96,76,0.1)",
-            border:"1px solid rgba(232,96,76,0.3)",borderRadius:10,color:"#E8604C",
-            fontSize:11,fontWeight:600}}>
+            border:"1px solid rgba(232,96,76,0.3)",borderRadius:10,color:"#E8604C",fontSize:11,fontWeight:600}}>
           🗑 REMOVER DEL ROSTER
         </button>
       )}
@@ -179,209 +245,97 @@ function PokemonCard({pokemon, rank, isWinner, onAddToRoster, inRoster, onRemove
 }
 
 // ── Analyze View ─────────────────────────────────────────────────────────────
-function AnalyzeView({onAnalyzed}) {
+// Unified: paste JSON → choose compare or save to roster
+function AnalyzeView({onCompare, onSaveToRoster}) {
   const [jsonText, setJsonText] = useState("");
-  const [images, setImages] = useState([]);
-  const [error, setError] = useState("");
+  const [error, setError]       = useState("");
 
-  const PROMPT = `Analiza estos screenshots de Pokémon Sleep y devuelve SOLO un array JSON válido, sin texto adicional ni backticks. Cada objeto debe tener exactamente estos campos:
-{
-  "name": "nombre del pokemon",
-  "species": "especie (ej Latios)",
-  "level": 27,
-  "rp": 1427,
-  "frequency": "38 mins 2 secs",
-  "carryLimit": 19,
-  "specialty": "Berries",
-  "nature": "Bashful",
-  "natureBuff": null,
-  "natureNerf": null,
-  "subskills": {
-    "10": {"name": "Helping Speed M", "locked": false},
-    "25": {"name": "Skill Level Up S", "locked": false},
-    "50": {"name": "Helping Speed S", "locked": true},
-    "70": {"name": "Dream Shard Bonus", "locked": true},
-    "80": {"name": "Research EXP Bonus", "locked": true}
-  }
-}`;
-
-  function handlePaste() {
+  function parse() {
     setError("");
     try {
-      const clean = jsonText.replace(/```json|```/g,"").trim();
+      const clean  = jsonText.replace(/```json|```/g,"").trim();
       const parsed = JSON.parse(clean);
-      const arr = Array.isArray(parsed) ? parsed : [parsed];
-      const withIds = arr.map(p => ({...p, id: p.name + "_" + Date.now() + Math.random()}));
-      onAnalyzed(withIds);
+      const arr    = Array.isArray(parsed) ? parsed : [parsed];
+      return arr.map(p => ({...p, id: p.name + "_" + Date.now() + Math.random()}));
     } catch(e) {
-      setError("JSON inválido. Asegúrate de copiar exactamente lo que Claude te devolvió.");
+      setError("JSON inválido. Asegúrate de copiar exactamente lo que Claude devolvió.");
+      return null;
     }
+  }
+
+  function handleCompare() {
+    const arr = parse(); if (!arr) return;
+    onCompare(arr);
+  }
+
+  function handleSave() {
+    const arr = parse(); if (!arr) return;
+    arr.forEach(p => onSaveToRoster(p));
+    setJsonText("");
+    setError("");
+    alert(`✓ ${arr.length} Pokémon agregado(s) al roster`);
   }
 
   return (
     <div>
       <div style={{textAlign:"center",padding:"16px 0 20px"}}>
         <div style={{fontSize:22,fontWeight:800,marginBottom:6}}>Analizar Pokémon</div>
-        <div style={{fontSize:12,color:"#A09BC0",lineHeight:1.6}}>
-          Sube los screenshots en el chat de Claude.ai,<br/>pega aquí el JSON que te devuelva.
+        <div style={{fontSize:12,color:"#A09BC0",lineHeight:1.7}}>
+          Sube los screenshots en claude.ai con el prompt de abajo.<br/>
+          Pega aquí el JSON que Claude te devuelva.
         </div>
       </div>
 
-      {/* Step 1 */}
+      <CopyPromptBox/>
+
       <div style={{background:"rgba(75,45,143,0.1)",border:"1px solid rgba(75,45,143,0.25)",
         borderRadius:12,padding:16,marginBottom:14}}>
         <div style={{fontSize:11,color:"#4B2D8F",fontFamily:"monospace",marginBottom:8,letterSpacing:"0.08em"}}>
-          PASO 1 — COPIA ESTE PROMPT
+          PASO 2 — PEGA EL JSON AQUÍ
         </div>
-        <div style={{fontSize:11,color:"#A09BC0",lineHeight:1.6,marginBottom:10,fontFamily:"monospace",
-          background:"rgba(0,0,0,0.2)",padding:10,borderRadius:8,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>
-          {PROMPT}
-        </div>
-        <button onClick={()=>navigator.clipboard?.writeText(PROMPT)}
-          style={{width:"100%",padding:"8px",background:"rgba(75,45,143,0.3)",border:"1px solid rgba(75,45,143,0.5)",
-            borderRadius:8,color:"#E8E4F0",fontSize:11,fontWeight:600,letterSpacing:"0.05em"}}>
-          📋 COPIAR PROMPT
-        </button>
-      </div>
-
-      {/* Step 2 */}
-      <div style={{background:"rgba(75,45,143,0.1)",border:"1px solid rgba(75,45,143,0.25)",
-        borderRadius:12,padding:16,marginBottom:14}}>
-        <div style={{fontSize:11,color:"#4B2D8F",fontFamily:"monospace",marginBottom:8,letterSpacing:"0.08em"}}>
-          PASO 2 — VE A CLAUDE.AI
-        </div>
-        <div style={{fontSize:12,color:"#A09BC0",lineHeight:1.6}}>
-          Abre claude.ai, sube los screenshots de tus Pokémon y pega el prompt de arriba. Claude te devolverá un JSON.
-        </div>
-      </div>
-
-      {/* Step 3 */}
-      <div style={{background:"rgba(75,45,143,0.1)",border:"1px solid rgba(75,45,143,0.25)",
-        borderRadius:12,padding:16,marginBottom:14}}>
-        <div style={{fontSize:11,color:"#4B2D8F",fontFamily:"monospace",marginBottom:8,letterSpacing:"0.08em"}}>
-          PASO 3 — PEGA EL JSON AQUÍ
-        </div>
-        <textarea
-          value={jsonText}
-          onChange={e=>setJsonText(e.target.value)}
-          placeholder='[{"name":"Pochi","species":"Latios",...}]'
-        />
-        {error && (
-          <div style={{marginTop:8,fontSize:11,color:"#E8604C",fontFamily:"monospace"}}>{error}</div>
-        )}
-      </div>
-
-      <button onClick={handlePaste} disabled={!jsonText.trim()}
-        style={{width:"100%",padding:14,
-          background:jsonText.trim()?"linear-gradient(135deg,#4B2D8F,#7B4DBF)":"rgba(255,255,255,0.05)",
-          border:"none",borderRadius:12,
-          color:jsonText.trim()?"#E8E4F0":"#555577",
-          fontSize:14,fontWeight:700,letterSpacing:"0.08em"}}>
-        🔍 CARGAR Y COMPARAR
-      </button>
-    </div>
-  );
-}
-
-// ── Roster Add View ───────────────────────────────────────────────────────────
-function RosterAddView({onAdd, onBack}) {
-  const [jsonText, setJsonText] = useState("");
-  const [error, setError] = useState("");
-
-  const PROMPT = `Analiza este screenshot de Pokémon Sleep y devuelve SOLO un objeto JSON válido (no array), sin texto adicional ni backticks:
-{
-  "name": "nombre",
-  "species": "especie",
-  "level": 27,
-  "rp": 1427,
-  "frequency": "38 mins 2 secs",
-  "carryLimit": 19,
-  "specialty": "Berries",
-  "nature": "Bashful",
-  "natureBuff": null,
-  "natureNerf": null,
-  "subskills": {
-    "10": {"name": "Helping Speed M", "locked": false},
-    "25": {"name": "Skill Level Up S", "locked": false},
-    "50": {"name": "Helping Speed S", "locked": true},
-    "70": {"name": "Dream Shard Bonus", "locked": true},
-    "80": {"name": "Research EXP Bonus", "locked": true}
-  }
-}`;
-
-  function handleAdd() {
-    setError("");
-    try {
-      const clean = jsonText.replace(/```json|```/g,"").trim();
-      const parsed = JSON.parse(clean);
-      const arr = Array.isArray(parsed) ? parsed : [parsed];
-      const withIds = arr.map(p => ({...p, id: p.name + "_" + Date.now() + Math.random()}));
-      withIds.forEach(p => onAdd(p));
-      onBack();
-    } catch(e) {
-      setError("JSON inválido. Copia exactamente lo que Claude te devolvió.");
-    }
-  }
-
-  return (
-    <div>
-      <div style={{textAlign:"center",padding:"16px 0 20px"}}>
-        <div style={{fontSize:22,fontWeight:800,marginBottom:6}}>Agregar al Roster</div>
-        <div style={{fontSize:12,color:"#A09BC0"}}>Agrega un Pokémon directamente sin comparar</div>
-      </div>
-
-      <div style={{background:"rgba(75,45,143,0.1)",border:"1px solid rgba(75,45,143,0.25)",
-        borderRadius:12,padding:16,marginBottom:14}}>
-        <div style={{fontSize:11,color:"#4B2D8F",fontFamily:"monospace",marginBottom:8}}>PROMPT PARA CLAUDE.AI</div>
-        <div style={{fontSize:11,color:"#A09BC0",background:"rgba(0,0,0,0.2)",padding:10,borderRadius:8,
-          fontFamily:"monospace",whiteSpace:"pre-wrap",wordBreak:"break-word",marginBottom:10}}>
-          {PROMPT}
-        </div>
-        <button onClick={()=>navigator.clipboard?.writeText(PROMPT)}
-          style={{width:"100%",padding:"8px",background:"rgba(75,45,143,0.3)",border:"1px solid rgba(75,45,143,0.5)",
-            borderRadius:8,color:"#E8E4F0",fontSize:11,fontWeight:600}}>
-          📋 COPIAR PROMPT
-        </button>
-      </div>
-
-      <div style={{background:"rgba(75,45,143,0.1)",border:"1px solid rgba(75,45,143,0.25)",
-        borderRadius:12,padding:16,marginBottom:14}}>
-        <div style={{fontSize:11,color:"#4B2D8F",fontFamily:"monospace",marginBottom:8}}>PEGA EL JSON AQUÍ</div>
         <textarea value={jsonText} onChange={e=>setJsonText(e.target.value)}
-          placeholder='{"name":"Pochi","species":"Latios",...}'/>
+          placeholder='[{"name":"Pochi","species":"Latios",...}]'/>
         {error && <div style={{marginTop:8,fontSize:11,color:"#E8604C",fontFamily:"monospace"}}>{error}</div>}
       </div>
 
-      <button onClick={handleAdd} disabled={!jsonText.trim()}
-        style={{width:"100%",padding:14,marginBottom:10,
-          background:jsonText.trim()?"linear-gradient(135deg,#2ECC8A,#1a9960)":"rgba(255,255,255,0.05)",
-          border:"none",borderRadius:12,
-          color:jsonText.trim()?"#0D1B2A":"#555577",
-          fontSize:14,fontWeight:700,letterSpacing:"0.08em"}}>
-        + AGREGAR AL ROSTER
-      </button>
-      <button onClick={onBack}
-        style={{width:"100%",padding:12,background:"transparent",
-          border:"1px solid rgba(255,255,255,0.1)",borderRadius:12,color:"#A09BC0",fontSize:13}}>
-        Cancelar
-      </button>
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={handleCompare} disabled={!jsonText.trim()}
+          style={{flex:1,padding:13,
+            background:jsonText.trim()?"linear-gradient(135deg,#4B2D8F,#7B4DBF)":"rgba(255,255,255,0.05)",
+            border:"none",borderRadius:12,
+            color:jsonText.trim()?"#E8E4F0":"#555577",
+            fontSize:13,fontWeight:700,letterSpacing:"0.05em"}}>
+          ⚔️ COMPARAR
+        </button>
+        <button onClick={handleSave} disabled={!jsonText.trim()}
+          style={{flex:1,padding:13,
+            background:jsonText.trim()?"linear-gradient(135deg,#2ECC8A,#1a9960)":"rgba(255,255,255,0.05)",
+            border:"none",borderRadius:12,
+            color:jsonText.trim()?"#0D1B2A":"#555577",
+            fontSize:13,fontWeight:700,letterSpacing:"0.05em"}}>
+          📋 GUARDAR
+        </button>
+      </div>
+      <div style={{marginTop:8,fontSize:10,color:"#555577",textAlign:"center",fontFamily:"monospace"}}>
+        COMPARAR → ve el ranking · GUARDAR → va directo al roster
+      </div>
     </div>
   );
 }
 
 // ── Roster View ───────────────────────────────────────────────────────────────
-function RosterView({roster, onRemove, onAddNew}) {
+function RosterView({roster, onRemove, onGoAnalyze}) {
   if (roster.length === 0) return (
     <div style={{textAlign:"center",padding:"60px 20px"}}>
       <div style={{fontSize:40,marginBottom:16}}>🌙</div>
       <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Tu roster está vacío</div>
       <div style={{fontSize:13,color:"#A09BC0",marginBottom:24}}>
-        Agrega Pokémon desde el comparador o directamente aquí
+        Analiza tus Pokémon y guárdalos aquí
       </div>
-      <button onClick={onAddNew}
+      <button onClick={onGoAnalyze}
         style={{padding:"12px 24px",background:"linear-gradient(135deg,#4B2D8F,#7B4DBF)",
           border:"none",borderRadius:12,color:"#E8E4F0",fontSize:13,fontWeight:700}}>
-        + AGREGAR POKÉMON
+        🔍 ANALIZAR POKÉMON
       </button>
     </div>
   );
@@ -395,11 +349,6 @@ function RosterView({roster, onRemove, onAddNew}) {
           <div style={{fontSize:11,color:"#555577",fontFamily:"monospace"}}>TU ROSTER</div>
           <div style={{fontSize:18,fontWeight:700}}>{roster.length} Pokémon guardados</div>
         </div>
-        <button onClick={onAddNew}
-          style={{padding:"8px 14px",background:"rgba(75,45,143,0.4)",
-            border:"1px solid rgba(75,45,143,0.6)",borderRadius:20,color:"#E8E4F0",fontSize:12,fontWeight:600}}>
-          + AGREGAR
-        </button>
       </div>
       {sorted.map((p,i) => (
         <PokemonCard key={p.id||i} pokemon={p} onRemoveFromRoster={onRemove}/>
@@ -408,29 +357,56 @@ function RosterView({roster, onRemove, onAddNew}) {
   );
 }
 
-// ── Main App ──────────────────────────────────────────────────────────────────
-const DEMO = [
-  {id:"demo1",name:"Pochi",species:"Latios",level:27,rp:1427,frequency:"38 mins 2 secs",carryLimit:19,specialty:"Berries",
-   nature:"Bashful",natureBuff:null,natureNerf:null,
-   subskills:{10:{name:"Helping Speed M",locked:false},25:{name:"Skill Level Up S",locked:false},
-     50:{name:"Helping Speed S",locked:true},70:{name:"Dream Shard Bonus",locked:true},80:{name:"Research EXP Bonus",locked:true}},
-   verdict:"El mejor de los tres. Helping Speed M en Lv.10 es uno de los arranques más valiosos. A Lv.50 suma Helping Speed S — doble stack de velocidad."},
-  {id:"demo2",name:"Vaughan",species:"Latios",level:27,rp:1381,frequency:"39 mins 48 secs",carryLimit:19,specialty:"Berries",
-   nature:"Lonely",natureBuff:"Speed of Help",natureNerf:"Energy Recovery",
-   subskills:{10:{name:"Skill Trigger S",locked:false},25:{name:"Skill Level Up S",locked:false},
-     50:{name:"Helping Speed S",locked:true},70:{name:"Inventory Up S",locked:true},80:{name:"Skill Trigger M",locked:true}},
-   verdict:"Sólido con potencial a largo plazo. Lonely actúa como subskill gratis de velocidad. Skill Trigger M en Lv.80 es prometedor."},
-  {id:"demo3",name:"Bianco",species:"Latios",level:28,rp:1506,frequency:"44 mins 8 secs",carryLimit:19,specialty:"Berries",
-   nature:"Docile",natureBuff:null,natureNerf:null,
-   subskills:{10:{name:"Sleep EXP Bonus",locked:false},25:{name:"Skill Level Up S",locked:false},
-     50:{name:"Inventory Up L",locked:true},70:{name:"Helping Speed S",locked:true},80:{name:"Skill Trigger S",locked:true}},
-   verdict:"Sleep EXP Bonus en Lv.10 desperdicia el slot más valioso. Su mejor subskill está en Lv.70 — requiere inversión masiva."},
-];
+// ── Compare View ──────────────────────────────────────────────────────────────
+function CompareView({compared, onAddToRoster, rosterIds, onGoAnalyze}) {
+  if (compared.length === 0) return (
+    <div style={{textAlign:"center",padding:"60px 20px"}}>
+      <div style={{fontSize:40,marginBottom:16}}>⚔️</div>
+      <div style={{fontSize:18,fontWeight:700,marginBottom:8}}>Nada que comparar aún</div>
+      <div style={{fontSize:13,color:"#A09BC0",marginBottom:24}}>
+        Analiza tus Pokémon para ver el ranking aquí
+      </div>
+      <button onClick={onGoAnalyze}
+        style={{padding:"12px 24px",background:"linear-gradient(135deg,#4B2D8F,#7B4DBF)",
+          border:"none",borderRadius:12,color:"#E8E4F0",fontSize:13,fontWeight:700}}>
+        🔍 IR A ANALIZAR
+      </button>
+    </div>
+  );
 
+  const sorted = [...compared].sort((a,b) => totalScore(b) - totalScore(a));
+
+  return (
+    <div>
+      <div style={{background:"rgba(75,45,143,0.15)",border:"1px solid rgba(75,45,143,0.25)",
+        borderRadius:12,padding:"14px 16px",marginBottom:20,
+        display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div>
+          <div style={{fontSize:11,color:"#555577",fontFamily:"monospace",marginBottom:2}}>RECOMENDACIÓN</div>
+          <div style={{fontSize:16,fontWeight:700,color:"#F0C040"}}>Invertir en {sorted[0]?.name}</div>
+        </div>
+        <div style={{background:"rgba(240,192,64,0.15)",border:"1px solid rgba(240,192,64,0.3)",
+          borderRadius:8,padding:"6px 12px",fontSize:11,color:"#F0C040",fontFamily:"monospace"}}>
+          {sorted.length} Pokémon
+        </div>
+      </div>
+      {sorted.map((p,i) => (
+        <PokemonCard key={p.id||i} pokemon={p} rank={i} isWinner={i===0}
+          onAddToRoster={onAddToRoster} inRoster={rosterIds.has(p.id)}/>
+      ))}
+      <div style={{padding:12,background:"rgba(255,255,255,0.03)",borderRadius:8,
+        fontSize:10,color:"#555577",fontFamily:"monospace",lineHeight:1.6}}>
+        * Análisis basado en subskills activos + proyección a Lv.70 · Update 3.6.0
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
-  const [view, setView] = useState(VIEWS.COMPARE);
-  const [compared, setCompared] = useState(DEMO);
-  const [roster, setRoster] = useState(() => {
+  const [view, setView]       = useState(VIEWS.ANALYZE);
+  const [compared, setCompared] = useState([]);
+  const [roster, setRoster]   = useState(() => {
     try { return JSON.parse(localStorage.getItem("pks_roster") || "[]"); }
     catch { return []; }
   });
@@ -448,71 +424,50 @@ function App() {
     setRoster(prev => prev.filter(p => p.id !== id));
   }
 
-  function handleAnalyzed(pokemons) {
+  function handleCompare(pokemons) {
     setCompared(pokemons);
     setView(VIEWS.COMPARE);
   }
 
-  const sorted = [...compared].sort((a,b) => totalScore(b) - totalScore(a));
   const rosterIds = new Set(roster.map(p => p.id));
 
   const NAV = [
-    { id: VIEWS.COMPARE, label: "Comparar", icon: "⚔️" },
     { id: VIEWS.ANALYZE, label: "Analizar", icon: "🔍" },
+    { id: VIEWS.COMPARE, label: "Comparar", icon: "⚔️" },
     { id: VIEWS.ROSTER,  label: "Roster",   icon: "📋" },
   ];
 
   return (
-    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#0D1B2A 0%,#0a1220 60%,#130a28 100%)",
-      paddingBottom:70}}>
+    <div style={{minHeight:"100vh",
+      background:"linear-gradient(160deg,#0D1B2A 0%,#0a1220 60%,#130a28 100%)",paddingBottom:70}}>
 
       {/* Header */}
       <div style={{background:"rgba(75,45,143,0.15)",borderBottom:"1px solid rgba(75,45,143,0.3)",
         padding:"14px 16px",position:"sticky",top:0,backdropFilter:"blur(12px)",zIndex:10}}>
         <div style={{fontSize:18,fontWeight:800,color:"#E8E4F0"}}>🌙 SLEEP OPTIMIZER</div>
-        <div style={{fontSize:10,color:"#4B2D8F",fontFamily:"monospace",letterSpacing:"0.1em"}}>POKÉMON SLEEP · COMPARADOR & ROSTER</div>
+        <div style={{fontSize:10,color:"#4B2D8F",fontFamily:"monospace",letterSpacing:"0.1em"}}>
+          POKÉMON SLEEP · COMPARADOR & ROSTER
+        </div>
       </div>
 
       {/* Content */}
       <div style={{padding:"20px 16px",maxWidth:480,margin:"0 auto"}}>
-        {view === VIEWS.COMPARE && (
-          <div>
-            <div style={{background:"rgba(75,45,143,0.15)",border:"1px solid rgba(75,45,143,0.25)",
-              borderRadius:12,padding:"14px 16px",marginBottom:20,
-              display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <div>
-                <div style={{fontSize:11,color:"#555577",fontFamily:"monospace",marginBottom:2}}>RECOMENDACIÓN</div>
-                <div style={{fontSize:16,fontWeight:700,color:"#F0C040"}}>Invertir en {sorted[0]?.name}</div>
-              </div>
-              <div style={{background:"rgba(240,192,64,0.15)",border:"1px solid rgba(240,192,64,0.3)",
-                borderRadius:8,padding:"6px 12px",fontSize:11,color:"#F0C040",fontFamily:"monospace"}}>
-                {sorted.length} Pokémon
-              </div>
-            </div>
-            {sorted.map((p,i) => (
-              <PokemonCard key={p.id||i} pokemon={p} rank={i} isWinner={i===0}
-                onAddToRoster={addToRoster} inRoster={rosterIds.has(p.id)}/>
-            ))}
-            <div style={{padding:12,background:"rgba(255,255,255,0.03)",borderRadius:8,
-              fontSize:10,color:"#555577",fontFamily:"monospace",lineHeight:1.6}}>
-              * Análisis basado en subskills activos + proyección a Lv.70 · Update 3.6.0
-            </div>
-          </div>
+        {view === VIEWS.ANALYZE && (
+          <AnalyzeView onCompare={handleCompare} onSaveToRoster={addToRoster}/>
         )}
-        {view === VIEWS.ANALYZE && <AnalyzeView onAnalyzed={handleAnalyzed}/>}
+        {view === VIEWS.COMPARE && (
+          <CompareView compared={compared} onAddToRoster={addToRoster}
+            rosterIds={rosterIds} onGoAnalyze={()=>setView(VIEWS.ANALYZE)}/>
+        )}
         {view === VIEWS.ROSTER && (
           <RosterView roster={roster} onRemove={removeFromRoster}
-            onAddNew={()=>setView(VIEWS.ROSTER_ADD)}/>
-        )}
-        {view === VIEWS.ROSTER_ADD && (
-          <RosterAddView onAdd={addToRoster} onBack={()=>setView(VIEWS.ROSTER)}/>
+            onGoAnalyze={()=>setView(VIEWS.ANALYZE)}/>
         )}
       </div>
 
       {/* Bottom nav */}
       <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(13,27,42,0.95)",
-        borderTop:"1px solid rgba(75,45,143,0.3)",backdropFilter:"blur(12px)",
-        display:"flex",zIndex:10}}>
+        borderTop:"1px solid rgba(75,45,143,0.3)",backdropFilter:"blur(12px)",display:"flex",zIndex:10}}>
         {NAV.map(n => (
           <button key={n.id} onClick={()=>setView(n.id)}
             style={{flex:1,padding:"12px 8px",background:"transparent",border:"none",
